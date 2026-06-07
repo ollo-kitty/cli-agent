@@ -1,11 +1,7 @@
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 from provider.message import Message, StepFinishPart, StepStartPart, text_message, to_langchain_messages
 from processor import process_stream
-from provider.prompt import build_prompt
-from provider.llm import create_llm
-
-from model_tools import get_tool_definitions
 
 def should_terminate(history: List[Message]) -> bool:
     """判断是否应该终止agent loop."""
@@ -25,6 +21,10 @@ def run_loop(
     llm,
     max_steps: int = 20,
     system_prompt: Optional[str] = None,
+    on_text_delta: Optional[Callable[[str], None]] = None,
+    on_tool_start: Optional[Callable[[str, Dict[str, Any]], None]] = None,
+    on_tool_result: Optional[Callable[[str, str], None]] = None,
+    on_step_start: Optional[Callable[[int], None]] = None,
 ) -> List[Message]:
     """Run the agent loop and return full message history."""
     history.append(text_message("user", user_message))
@@ -41,40 +41,29 @@ def run_loop(
             force_stop_added = True
 
         step += 1
-        print(f"\n[step {step}]")
+        if on_step_start:
+            on_step_start(step)
         assistant = Message(role="assistant", parts=[StepStartPart()])
         history.append(assistant)
 
         lc_messages = to_langchain_messages(history[:-1])
         active_tools = [] if force_stop_added else tools
-        result = process_stream(llm, system_prompt or "", lc_messages, active_tools, assistant, history)
+        text_delta_handler = on_text_delta or (lambda delta: None)
+        tool_start_handler = on_tool_start or (lambda name, args: None)
+        tool_result_handler = on_tool_result or (lambda name, output: None)
+        result = process_stream(
+            llm,
+            system_prompt or "",
+            lc_messages,
+            active_tools,
+            assistant,
+            history,
+            on_text_delta=text_delta_handler,
+            on_tool_start=tool_start_handler,
+            on_tool_result=tool_result_handler,
+        )
         assistant.parts.append(StepFinishPart(reason=result))
 
         if result == "stop":
             break
     return history
-
-if __name__ =="__main__":
-    llm = create_llm()
-    system_prompt = build_prompt()
-    tools = get_tool_definitions()
-    print("react agent from longchain")
-    history =[]
-    while True:
-        user_input = input("user:**").strip()
-        if user_input == "exit":
-            break
-        conversation=run_loop(
-            user_message=user_input,
-            history=history,
-            tools=tools,
-            llm=llm,
-            max_steps=20,
-            system_prompt=system_prompt
-            )
-        
-    
-    
-
-
-    
